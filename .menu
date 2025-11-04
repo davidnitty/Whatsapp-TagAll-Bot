@@ -1,0 +1,33 @@
+module.exports = {
+    name: '.menu',
+    description: 'Show available commands',
+    execute: async (sock, msg) => {
+        // Just call the same function as help
+        try {
+            const helpMessage = `
+🤖 *WhatsApp TagAll Bot* - Version 1.0.0
+
+📋 *Available Commands:*
+
+*.help* or *.menu*
+└ Display this help message
+
+*.tagall*
+└ Tag all members in the group
+└ Admin only command
+
+💡 *Note:* Only group admins can use .tagall
+
+✨ Bot is ready and active!
+            `;
+
+            await sock.sendMessage(msg.key.remoteJid, {
+                text: helpMessage.trim()
+            });
+            
+            console.log('✅ Menu command executed');
+        } catch (error) {
+            console.error('❌ Error in menu command:', error);
+        }
+    }
+};

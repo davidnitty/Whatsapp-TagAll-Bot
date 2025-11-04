@@ -1,0 +1,91 @@
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const qrcode = require('qrcode-terminal');
+const fs = require('fs');
+
+async function connectToWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+        version,
+        logger: pino({ level: 'silent' }), // Change to 'debug' for more logs
+        auth: state,
+        // Remove printQRInTerminal option - it's deprecated
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // Handle connection updates and QR code display
+    sock.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // Display QR code when available
+        if (qr) {
+            console.log('\n📱 Scan this QR code with WhatsApp:\n');
+            qrcode.generate(qr, { small: true });
+            console.log('\nOpen WhatsApp → Settings → Linked Devices → Link a Device\n');
+        }
+
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.log('Connection closed. Reconnecting:', shouldReconnect);
+            if (shouldReconnect) {
+                connectToWhatsApp();
+            }
+        } else if (connection === 'open') {
+            console.log('✅ Connected to WhatsApp successfully!');
+            console.log('Bot is ready to use. Add it to a group and make it admin.');
+        }
+    });
+
+    // Handle incoming messages
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        try {
+            const msg = messages[0];
+            if (!msg.message || msg.key.fromMe) return;
+
+            const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+            const from = msg.key.remoteJid;
+            const isGroup = from.endsWith('@g.us');
+
+            if (!isGroup) return; // Only respond in groups
+
+            // Load commands
+            const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
+            
+            for (const file of commandFiles) {
+                const command = require(`./commands/${file}`);
+                if (messageText.toLowerCase().startsWith(command.name)) {
+                    try {
+                        // Check if socket is still open before executing
+                        if (sock.ws?.readyState === 1) {
+                            await command.execute(sock, msg);
+                        } else {
+                            console.log('⚠️ Cannot execute command - connection is closed');
+                        }
+                    } catch (error) {
+                        console.error('Error executing command:', error.message);
+                        // Only try to send error message if connected
+                        if (sock.ws?.readyState === 1) {
+                            try {
+                                await sock.sendMessage(from, { text: '❌ An error occurred while executing the command.' });
+                            } catch (sendError) {
+                                console.log('Could not send error message - connection issue');
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        } catch (error) {
+            console.error('Error processing message:', error.message);
+        }
+    });
+
+    return sock;
+}
+
+// Start the bot
+console.log('🚀 Starting WhatsApp TagAll Bot...\n');
+connectToWhatsApp().catch(err => console.error('Error:', err));
