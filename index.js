@@ -120,13 +120,9 @@ async function connectToWhatsApp() {
                     console.log('✅ Command matched! Executing:', command.name);
                     
                     try {
-                        // Check if socket is still open before executing
-                        if (sock.ws?.readyState === 1) {
-                            await command.execute(sock, msg);
-                            console.log('✅ Command executed successfully');
-                        } else {
-                            console.log('⚠️ Cannot execute command - connection is closed');
-                        }
+                        // Execute command - let it handle connection issues internally
+                        await command.execute(sock, msg);
+                        console.log('✅ Command executed successfully');
                     } catch (error) {
                         console.error('❌ Error executing command:', error.message);
                         // Only try to send error message if connected
