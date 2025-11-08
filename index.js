@@ -100,6 +100,10 @@ async function connectToWhatsApp() {
                 console.log('⚠️ Not a command (doesn\'t start with .)');
                 return;
             }
+            
+            // Get just the command part (remove any extra text)
+            const commandOnly = messageText.trim().split(' ')[0].toLowerCase();
+            console.log('🔍 Command only:', commandOnly);
 
             console.log('🔍 Checking commands folder...');
 

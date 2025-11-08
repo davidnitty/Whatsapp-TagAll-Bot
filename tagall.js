@@ -4,46 +4,75 @@ module.exports = {
     execute: async (sock, msg) => {
         try {
             const groupId = msg.key.remoteJid;
+            const senderId = msg.key.participant || msg.key.remoteJid;
             
             // Get group metadata
             const groupMetadata = await sock.groupMetadata(groupId);
             const participants = groupMetadata.participants;
             
-            // Check if sender is admin
-            const sender = msg.key.participant || msg.key.remoteJid;
-            const senderIsAdmin = participants.find(p => p.id === sender)?.admin;
+            if (!participants || participants.length === 0) {
+                await sock.sendMessage(groupId, { text: 'No participants found in the group.' });
+                return;
+            }
             
-            if (!senderIsAdmin) {
+            // Check if sender is admin
+            const sender = participants.find(p => p.id === senderId);
+            const isSenderAdmin = sender && (sender.admin === 'admin' || sender.admin === 'superadmin');
+            
+            if (!isSenderAdmin) {
                 await sock.sendMessage(groupId, {
-                    text: '❌ Only group admins can use this command!'
+                    text: '❌ Only group admins can use this command.'
                 });
                 return;
             }
             
-            // Create mention list
+            // Create mention list (invisible - just tag without showing numbers)
             let mentions = participants.map(p => p.id);
-            let text = '📢 *Attention Everyone!*\n\n';
             
-            // Add all participants
-            participants.forEach((participant, index) => {
-                const number = participant.id.split('@')[0];
-                text += `${index + 1}. @${number}\n`;
-            });
+            // Simple message WITHOUT listing all numbers
+            let mentionText = '📢 *Attention Everyone!*\n\n';
+            mentionText += 'Important announcement for all group members.\n\n';
             
-            text += `\n👥 Total: ${participants.length} members`;
+            // Add invisible mentions (they get tagged but numbers don't show)
+            mentionText += participants.map(p => `@${p.id.split('@')[0]}`).join(' ');
             
-            // Send message with mentions
-            await sock.sendMessage(groupId, {
-                text: text,
-                mentions: mentions
-            });
+            // Alternative: Completely invisible (no visible text, just tags)
+            // Uncomment this and comment the above if you want ZERO visible tags:
+            // mentionText = '📢 *Attention Everyone!* 🔔';
             
-            console.log('✅ Tagged all members successfully!');
+            // Send message with retry logic
+            let sent = false;
+            for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                    // Check WebSocket state before attempting
+                    if (!sock.ws || sock.ws.readyState !== 1) {
+                        console.log(`⚠️ WebSocket not ready, waiting... (attempt ${attempt + 1}/5)`);
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        continue;
+                    }
+                    
+                    await sock.sendMessage(groupId, {
+                        text: mentionText,
+                        mentions: mentions
+                    });
+                    
+                    console.log(`✅ Tagged ${participants.length} members successfully (invisible mode)!`);
+                    sent = true;
+                    break;
+                } catch (sendError) {
+                    console.log(`⚠️ Send attempt ${attempt + 1}/5 failed:`, sendError.message);
+                    if (attempt < 4) {
+                        console.log('⏳ Waiting 3 seconds before retry...');
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                    }
+                }
+            }
+            
+            if (!sent) {
+                console.log('❌ Failed to send message after 5 attempts');
+            }
         } catch (error) {
-            console.error('Error in tagall command:', error);
-            await sock.sendMessage(msg.key.remoteJid, {
-                text: '❌ Failed to tag all members. Make sure the bot is a group admin.'
-            });
+            console.error('❌ Error in tagall command:', error.message);
         }
     }
 };
