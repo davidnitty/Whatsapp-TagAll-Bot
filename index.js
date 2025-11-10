@@ -12,6 +12,22 @@ process.on('unhandledRejection', (error) => {
     console.error('❌ Unhandled rejection:', error.message);
 });
 
+// Rate limiter to prevent spam
+const commandCooldowns = new Map();
+const COOLDOWN_TIME = 10000; // 10 seconds between commands
+
+function isOnCooldown(userId, commandName) {
+    const cooldownKey = `${userId}-${commandName}`;
+    const lastUsed = commandCooldowns.get(cooldownKey);
+    
+    if (lastUsed && Date.now() - lastUsed < COOLDOWN_TIME) {
+        return true;
+    }
+    
+    commandCooldowns.set(cooldownKey, Date.now());
+    return false;
+}
+
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
     const { version } = await fetchLatestBaileysVersion();
