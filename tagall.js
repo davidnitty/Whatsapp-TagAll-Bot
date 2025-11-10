@@ -26,19 +26,16 @@ module.exports = {
                 return;
             }
             
-            // Create mention list (invisible - just tag without showing numbers)
+            // Create mention list (completely invisible tags)
             let mentions = participants.map(p => p.id);
             
-            // Simple message WITHOUT listing all numbers
-            let mentionText = '📢 *Attention Everyone!*\n\n';
-            mentionText += 'Important announcement for all group members.\n\n';
+            // Message WITHOUT showing any numbers - completely clean
+            let mentionText = '📢 *Attention Everyone!* 🔔\n\n';
+            mentionText += 'Important group announcement.\n';
+            mentionText += `Total members: ${participants.length}`;
             
-            // Add invisible mentions (they get tagged but numbers don't show)
-            mentionText += participants.map(p => `@${p.id.split('@')[0]}`).join(' ');
-            
-            // Alternative: Completely invisible (no visible text, just tags)
-            // Uncomment this and comment the above if you want ZERO visible tags:
-            // mentionText = '📢 *Attention Everyone!* 🔔';
+            // The mentions array handles the tagging invisibly
+            // People get notified but numbers don't appear in the message
             
             // Send message with retry logic
             let sent = false;

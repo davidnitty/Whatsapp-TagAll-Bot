@@ -118,9 +118,10 @@ async function connectToWhatsApp() {
             
             for (const file of commandFiles) {
                 const command = require(`./commands/${file}`);
-                console.log(`🔍 Checking command: ${command.name} against message: ${messageText}`);
+                console.log(`🔍 Checking command: ${command.name} against: ${commandOnly}`);
                 
-                if (messageText.toLowerCase().startsWith(command.name.toLowerCase())) {
+                // Match exact command only (not partial text)
+                if (commandOnly === command.name.toLowerCase()) {
                     console.log('✅ Command matched! Executing:', command.name);
                     
                     try {
