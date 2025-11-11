@@ -3,30 +3,12 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 
-// Handle uncaught errors to prevent crashes
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught error:', error.message);
-});
+// Rate limiter - prevent spam
+const lastCommandTime = new Map();
+const COOLDOWN_MS = 10000; // 10 seconds
 
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Unhandled rejection:', error.message);
-});
-
-// Rate limiter to prevent spam
-const commandCooldowns = new Map();
-const COOLDOWN_TIME = 10000; // 10 seconds between commands
-
-function isOnCooldown(userId, commandName) {
-    const cooldownKey = `${userId}-${commandName}`;
-    const lastUsed = commandCooldowns.get(cooldownKey);
-    
-    if (lastUsed && Date.now() - lastUsed < COOLDOWN_TIME) {
-        return true;
-    }
-    
-    commandCooldowns.set(cooldownKey, Date.now());
-    return false;
-}
+// Process control
+let processingCommand = false;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -34,139 +16,132 @@ async function connectToWhatsApp() {
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }), // Change to 'debug' for more logs
+        logger: pino({ level: 'silent' }),
         auth: state,
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Handle connection updates and QR code display
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Display QR code when available
         if (qr) {
-            console.log('\n📱 Scan this QR code with WhatsApp:\n');
+            console.log('\n📱 Scan QR code:\n');
             qrcode.generate(qr, { small: true });
-            console.log('\nOpen WhatsApp → Settings → Linked Devices → Link a Device\n');
         }
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed. Reconnecting:', shouldReconnect);
             if (shouldReconnect) {
-                // Wait 3 seconds before reconnecting to avoid rapid reconnection loops
                 setTimeout(() => {
-                    console.log('🔄 Attempting to reconnect...');
-                    connectToWhatsApp().catch(err => console.error('Reconnection failed:', err.message));
+                    connectToWhatsApp().catch(err => console.error('Reconnect failed:', err.message));
                 }, 3000);
             }
         } else if (connection === 'open') {
-            console.log('✅ Connected to WhatsApp successfully!');
-            console.log('Bot is ready to use. Add it to a group and make it admin.');
-            console.log('Available commands: .tagall, .help\n');
-        } else if (connection === 'connecting') {
-            console.log('🔄 Connecting to WhatsApp...');
+            console.log('✅ Connected to WhatsApp!');
+            console.log('⚠️ STRICT MODE: Only .tagall command will work\n');
         }
     });
 
-    // Handle incoming messages
+    // ULTRA-STRICT MESSAGE HANDLER
     sock.ev.on('messages.upsert', async ({ messages }) => {
         try {
+            // Prevent concurrent processing
+            if (processingCommand) {
+                console.log('⚠️ Already processing a command, skipping');
+                return;
+            }
+
             const msg = messages[0];
             
-            // Debug: Log all incoming messages
-            console.log('\n📩 Message received from:', msg.key.remoteJid);
+            // Basic validations
+            if (!msg || !msg.message) return;
+            if (!msg.key || !msg.key.remoteJid) return;
             
-            if (!msg.message) {
-                console.log('⚠️ No message content');
+            // ONLY group messages
+            if (!msg.key.remoteJid.endsWith('@g.us')) return;
+            
+            // Get message type
+            const msgType = Object.keys(msg.message)[0];
+            
+            // ONLY accept conversation type - reject everything else
+            if (msgType !== 'conversation') {
+                return; // Silent reject
+            }
+            
+            // Get text
+            const text = msg.message.conversation;
+            if (!text) return;
+            
+            // Trim and check
+            const trimmed = text.trim();
+            
+            // MUST be exactly ".tagall" - nothing more, nothing less
+            if (trimmed !== '.tagall') {
+                return; // Silent reject - not the command
+            }
+            
+            console.log('✅ .tagall command detected');
+            
+            // Check cooldown
+            const groupId = msg.key.remoteJid;
+            const lastUsed = lastCommandTime.get(groupId);
+            const now = Date.now();
+            
+            if (lastUsed && (now - lastUsed) < COOLDOWN_MS) {
+                const remaining = Math.ceil((COOLDOWN_MS - (now - lastUsed)) / 1000);
+                console.log(`⏱️ Cooldown active: ${remaining}s remaining`);
                 return;
             }
             
-            // Allow messages from the bot owner (fromMe) to execute commands
-            // This is needed because the bot is linked to your account
-            if (msg.key.fromMe) {
-                console.log('ℹ️ Message from bot owner (you)');
-            }
-
-            // Extract message text from various message types
-            const messageText = 
-                msg.message.conversation || 
-                msg.message.extendedTextMessage?.text || 
-                msg.message.imageMessage?.caption ||
-                msg.message.videoMessage?.caption ||
-                msg.message.documentMessage?.caption ||
-                '';
+            // Set processing flag
+            processingCommand = true;
+            lastCommandTime.set(groupId, now);
             
-            console.log('📝 Message text:', messageText);
-            console.log('📦 Message type:', Object.keys(msg.message)[0]);
-            
-            const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
-            
-            console.log('👥 Is group message:', isGroup);
-
-            if (!isGroup) {
-                console.log('⚠️ Not a group message, ignoring');
-                return;
-            }
-
-            // Check if message is a command
-            if (!messageText.startsWith('.')) {
-                console.log('⚠️ Not a command (doesn\'t start with .)');
-                return;
-            }
-            
-            // Get just the command part (remove any extra text)
-            const commandOnly = messageText.trim().split(' ')[0].toLowerCase();
-            console.log('🔍 Command only:', commandOnly);
-
-            console.log('🔍 Checking commands folder...');
-
-            // Load commands
-            if (!fs.existsSync('./commands')) {
-                console.error('❌ Commands folder not found!');
-                return;
-            }
-
-            const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
-            console.log('📂 Found command files:', commandFiles);
-            
-            for (const file of commandFiles) {
-                const command = require(`./commands/${file}`);
-                console.log(`🔍 Checking command: ${command.name} against: ${commandOnly}`);
+            // Execute tagall
+            try {
+                const groupMetadata = await sock.groupMetadata(groupId);
+                const participants = groupMetadata.participants;
                 
-                // Match exact command only (not partial text)
-                if (commandOnly === command.name.toLowerCase()) {
-                    console.log('✅ Command matched! Executing:', command.name);
-                    
-                    try {
-                        // Execute command - let it handle connection issues internally
-                        await command.execute(sock, msg);
-                        console.log('✅ Command executed successfully');
-                    } catch (error) {
-                        console.error('❌ Error executing command:', error.message);
-                        // Only try to send error message if connected
-                        if (sock.ws?.readyState === 1) {
-                            try {
-                                await sock.sendMessage(from, { text: '❌ An error occurred while executing the command.' });
-                            } catch (sendError) {
-                                console.log('⚠️ Could not send error message - connection issue');
-                            }
-                        }
-                    }
-                    break;
+                // Check if sender is admin
+                const senderId = msg.key.participant || msg.key.remoteJid;
+                const sender = participants.find(p => p.id === senderId);
+                const isAdmin = sender && (sender.admin === 'admin' || sender.admin === 'superadmin');
+                
+                if (!isAdmin) {
+                    await sock.sendMessage(groupId, { 
+                        text: '❌ Only admins can use this command.' 
+                    });
+                    processingCommand = false;
+                    return;
                 }
+                
+                // Create mentions
+                const mentions = participants.map(p => p.id);
+                const mentionText = '📢 *Attention Everyone!* 🔔\n\nImportant group announcement.';
+                
+                // Send message
+                await sock.sendMessage(groupId, {
+                    text: mentionText,
+                    mentions: mentions
+                });
+                
+                console.log(`✅ Tagged ${participants.length} members`);
+                
+            } catch (error) {
+                console.error('❌ Command error:', error.message);
+            } finally {
+                processingCommand = false;
             }
+            
         } catch (error) {
-            console.error('❌ Error processing message:', error.message);
+            console.error('❌ Handler error:', error.message);
+            processingCommand = false;
         }
     });
 
     return sock;
 }
 
-// Start the bot
-console.log('🚀 Starting WhatsApp TagAll Bot...\n');
-console.log('📋 Debug mode enabled - all messages will be logged\n');
-connectToWhatsApp().catch(err => console.error('Error:', err));
+console.log('🚀 Starting WhatsApp TagAll Bot (STRICT MODE)...\n');
+connectToWhatsApp().catch(err => console.error('Start error:', err));
